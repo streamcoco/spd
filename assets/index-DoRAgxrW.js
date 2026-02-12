@@ -254,73 +254,81 @@ function Ch(){
     const ft=ce.useCallback((k,P)=>{k.type!=="PING"&&(k.type==="ACTION_SYNC"&&(i(k.state),localStorage.setItem(an,JSON.stringify(k.state)),Ie({type:"SYNC_STATE",state:k.state})),k.type==="NAME_UPDATE"&&m(L=>{const R={...L.names,[k.id]:k.name},A={...L,names:R};return Ie({type:"LOBBY_UPDATE",count:L.connectedCount,max:L.players,names:R}),A}))},[Ie]);
     
     // --- LÓGICA DE PEERJS Y RECONEXIÓN ---
-    ce.useEffect(()=>{let k=!0;if(!f.isOnline){S.current&&(S.current.destroy(),S.current=null,T.current=[],j.current=null,Q.current=!1,k&&(He(!1),st("")));return}if(f.isOnline&&!S.current&&!Q.current){Q.current=!0,console.log("Iniciando Red...");const P=_h(),L=new rh(P,{config:{iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"}]},debug:1});S.current=L,L.on("open",R=>{k&&(st(R),He(!0),Q.current=!1,q.current.isHost?(ie("Esperando jugadores..."),we(0),localStorage.setItem(dl,"0"),m(A=>({...A,names:{...A.names,0:c||"Anfitrión"}}))):ie('Red lista. Pulsa "Unirse".'))}),L.on("error",R=>{k&&(Q.current=!1,R.type==="peer-unavailable"?ie("❌ Sala no encontrada"):R.type==="disconnected"?ie("⚠️ Desconectado"):ie(`❌ Error: ${R.type}`),console.error("Peer Error:",R))}),L.on("disconnected",()=>{k&&(ie("⚠️ Reconectando..."),S.current&&!S.current.destroyed&&S.current.reconnect())});
-    L.on("connection",R=>{
-        R.on("open",()=>{
-            const A=q.current;
-            if(!A.isHost){R.close();return}
-
-            // Identificar jugador
-            const meta = R.metadata || {};
-            const sId = meta.stableId;
-            const pName = meta.name || "Jugador";
-            let pId;
-
-            // --- LÓGICA DE RECUPERACIÓN ROBUSTA ---
-            if(sId && playerMap.current[sId]){
-                pId = playerMap.current[sId];
-                console.log(`[HOST] Reconexión ID: ${pId}`);
-                
-                // Buscar si existe conexión vieja y reemplazarla EXACTAMENTE en su lugar
-                const oldConnIdx = T.current.findIndex(conn => conn.metadata?.stableId === sId);
-                if (oldConnIdx !== -1) {
-                    try { T.current[oldConnIdx].close(); } catch(e){}
-                    T.current[oldConnIdx] = R; // Reemplazo quirúrgico: Mantiene el orden
-                } else {
-                    T.current.push(R);
+  ce.useEffect(() => {
+    let k = !0;
+    if (!f.isOnline) return;
+    if (f.isOnline && !S.current && !Q.current) {
+        Q.current = !0;
+        import("./peerjs-D9LhCq3-.js").then(({ Peer: L }) => {
+            if (!k) return;
+            const R = new L(null, { debug: 2 });
+            S.current = R;
+            
+            R.on("open", A => {
+                if (k) {
+                    ie(`ID: ${A}`);
+                    m(Z => ({ ...Z, peerId: A }));
+                    f.isHost && (q.current = f);
                 }
-            } else {
-                // Nuevo jugador
-                const currentIds = Object.keys(playerMap.current).length;
-                if(currentIds >= A.players - 1){ 
-                    R.send({type:"ERROR",message:"Sala llena"});
-                    setTimeout(() => R.close(), 500);
-                    return; 
-                }
-                pId = currentIds + 1;
-                if(sId) {
-                    playerMap.current[sId] = pId;
-                    saveHostMap(); // Guardar en libreta
-                }
-                T.current.push(R);
-            }
+            });
 
-            // Contar conectados reales
-            const activeCount = Object.keys(playerMap.current).length + 1;
+            R.on("connection", A => {
+                A.on("open", () => {
+                    const Z = q.current;
+                    if (!Z.isHost) { A.close(); return; }
+                    
+                    // LÓGICA DE RECONEXIÓN SEGURA
+                    const meta = A.metadata || {};
+                    const sId = meta.stableId;
+                    const pName = meta.name || "Jugador";
+                    let pId;
 
-            if(k){
-                m(Z=>({...Z, connectedCount: activeCount}));
-                rt(200);
-            }
+                    if (sId && playerMap.current[sId]) {
+                        pId = playerMap.current[sId];
+                        const oldIdx = T.current.findIndex(c => c.metadata?.stableId === sId);
+                        if (oldIdx !== -1) {
+                            try { T.current[oldIdx].close(); } catch(e){}
+                            T.current[oldIdx] = A;
+                        } else {
+                            T.current.push(A);
+                        }
+                    } else {
+                        const count = Object.keys(playerMap.current).length;
+                        if (count >= Z.players - 1) {
+                            A.send({ type: "ERROR", message: "Sala llena" });
+                            return;
+                        }
+                        pId = count + 1;
+                        if (sId) {
+                            playerMap.current[sId] = pId;
+                            saveHostMap();
+                        }
+                        T.current.push(A);
+                    }
 
-            R.send({type:"WELCOME",playerId:pId,totalPlayers:A.players,variant:A.variant,names:A.names});
-            if(ae.current) R.send({type:"SYNC_STATE",state:ae.current});
+                    const activeCount = Object.keys(playerMap.current).length + 1;
+                    if (k) { m(prev => ({ ...prev, connectedCount: activeCount })); rt(200); }
 
-            setTimeout(() => {
-                const newNames = {...A.names, [pId]: pName};
-                m(prev=>({...prev, names: newNames}));
-                Ie({type:"LOBBY_UPDATE", count: activeCount, max: A.players, names: newNames});
-            }, 100);
-        });
-        R.on("data",A=>ft(A,R));
-        R.on("close",()=>{
-            // NO borramos de T.current para mantener el "asiento" reservado
-            console.log("Cliente desconectado (socket cerrado)");
-        });
-        R.on("error",A=>{console.error(A);R.close()})
-    })
-  
-    return()=>{k=!1}},[f.isOnline,Ie,ft,c]);
+                    A.send({ type: "WELCOME", playerId: pId, totalPlayers: Z.players, variant: Z.variant, names: Z.names });
+                    if (ae.current) A.send({ type: "SYNC_STATE", state: ae.current });
+
+                    setTimeout(() => {
+                        const n = { ...Z.names, [pId]: pName };
+                        m(prev => ({ ...prev, names: n }));
+                        Ie({ type: "LOBBY_UPDATE", count: activeCount, max: Z.players, names: n });
+                    }, 100);
+                });
+
+                A.on("data", Z => ft(Z, A));
+                A.on("error", Z => { console.error(Z); A.close(); });
+            });
+
+            R.on("disconnected", () => { R.reconnect(); });
+            R.on("error", A => { console.error(A); ie("Error de red"); });
+        }).catch(() => { Q.current = !1; });
+    }
+    return () => { k = !1; };
+}, [f.isOnline, Ie, ft, c]);
 
 const It=()=>{
         const k=f.roomId.trim().toUpperCase();
