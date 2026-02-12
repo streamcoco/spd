@@ -254,9 +254,12 @@ function Ch(){
     const ft=ce.useCallback((k,P)=>{k.type!=="PING"&&(k.type==="ACTION_SYNC"&&(i(k.state),localStorage.setItem(an,JSON.stringify(k.state)),Ie({type:"SYNC_STATE",state:k.state})),k.type==="NAME_UPDATE"&&m(L=>{const R={...L.names,[k.id]:k.name},A={...L,names:R};return Ie({type:"LOBBY_UPDATE",count:L.connectedCount,max:L.players,names:R}),A}))},[Ie]);
     
     // --- LÓGICA DE PEERJS Y RECONEXIÓN ---
+// --- LÓGICA DE PEERJS Y RECONEXIÓN ---
   ce.useEffect(() => {
     let k = !0;
     if (!f.isOnline) return;
+    
+    // Solo inicializar si no hay conexión activa
     if (f.isOnline && !S.current && !Q.current) {
         Q.current = !0;
         import("./peerjs-D9LhCq3-.js").then(({ Peer: L }) => {
@@ -268,7 +271,7 @@ function Ch(){
                 if (k) {
                     ie(`ID: ${A}`);
                     m(Z => ({ ...Z, peerId: A }));
-                    f.isHost && (q.current = f);
+                    if (f.isHost) q.current = f;
                 }
             });
 
@@ -277,7 +280,6 @@ function Ch(){
                     const Z = q.current;
                     if (!Z.isHost) { A.close(); return; }
                     
-                    // LÓGICA DE RECONEXIÓN SEGURA
                     const meta = A.metadata || {};
                     const sId = meta.stableId;
                     const pName = meta.name || "Jugador";
@@ -285,7 +287,7 @@ function Ch(){
 
                     if (sId && playerMap.current[sId]) {
                         pId = playerMap.current[sId];
-                        const oldIdx = T.current.findIndex(c => c.metadata?.stableId === sId);
+                        const oldIdx = T.current.findIndex(conn => conn.metadata && conn.metadata.stableId === sId);
                         if (oldIdx !== -1) {
                             try { T.current[oldIdx].close(); } catch(e){}
                             T.current[oldIdx] = A;
@@ -293,12 +295,12 @@ function Ch(){
                             T.current.push(A);
                         }
                     } else {
-                        const count = Object.keys(playerMap.current).length;
-                        if (count >= Z.players - 1) {
+                        const currentCount = Object.keys(playerMap.current).length;
+                        if (currentCount >= Z.players - 1) {
                             A.send({ type: "ERROR", message: "Sala llena" });
                             return;
                         }
-                        pId = count + 1;
+                        pId = currentCount + 1;
                         if (sId) {
                             playerMap.current[sId] = pId;
                             saveHostMap();
@@ -307,71 +309,79 @@ function Ch(){
                     }
 
                     const activeCount = Object.keys(playerMap.current).length + 1;
-                    if (k) { m(prev => ({ ...prev, connectedCount: activeCount })); rt(200); }
+                    if (k) { 
+                        m(prev => ({ ...prev, connectedCount: activeCount })); 
+                        rt(200); 
+                    }
 
                     A.send({ type: "WELCOME", playerId: pId, totalPlayers: Z.players, variant: Z.variant, names: Z.names });
                     if (ae.current) A.send({ type: "SYNC_STATE", state: ae.current });
 
                     setTimeout(() => {
-                        const n = { ...Z.names, [pId]: pName };
-                        m(prev => ({ ...prev, names: n }));
-                        Ie({ type: "LOBBY_UPDATE", count: activeCount, max: Z.players, names: n });
+                        const newNames = { ...Z.names, [pId]: pName };
+                        m(prev => ({ ...prev, names: newNames }));
+                        Ie({ type: "LOBBY_UPDATE", count: activeCount, max: Z.players, names: newNames });
                     }, 100);
                 });
 
-                A.on("data", Z => ft(Z, A));
-                A.on("error", Z => { console.error(Z); A.close(); });
+                A.on("data", data => ft(data, A));
+                A.on("error", err => { console.error(err); A.close(); });
             });
 
             R.on("disconnected", () => { R.reconnect(); });
-            R.on("error", A => { console.error(A); ie("Error de red"); });
+            R.on("error", err => { console.error(err); ie("Error de red"); });
         }).catch(() => { Q.current = !1; });
     }
     return () => { k = !1; };
-}, [f.isOnline, Ie, ft, c]);
-
-const It=()=>{
-        const k=f.roomId.trim().toUpperCase();
-        if(!k){ie("Ingresa un ID");return}
-        if(!S.current||!Pe){ie("⏳ Inicializando...");return}
+  }, [f.isOnline, Ie, ft, c]);
+const It = () => {
+        const k = f.roomId.trim().toUpperCase();
+        if (!k) { ie("Ingresa un ID"); return; }
+        if (!S.current || !Pe) { ie("⏳ Inicializando..."); return; }
         
-        j.current&&j.current.close();
+        if (j.current) j.current.close();
         ie("Conectando...");
-        localStorage.setItem(fl,c);
-        localStorage.setItem("spd_room", k); // PLAN B: Recordar sala
+        localStorage.setItem(fl, c);
+        localStorage.setItem("spd_room", k); 
 
-        // Enviar DNI (stableId) para ser reconocido
-        const P=S.current.connect(k,{
-            reliable:!0,
-            serialization:"json",
-            metadata:{stableId:stableId, name:c}
+        const P = S.current.connect(k, {
+            reliable: !0,
+            serialization: "json",
+            metadata: { stableId: stableId, name: c }
         });
 
-        j.current=P;
-        P.on("open",()=>{ie("Conectado. Sincronizando..."),rt(200)});
-        P.on("data",L=>{
-            L.type!=="PING"&&(
-                L.type==="SYNC_STATE"&&(i(L.state),localStorage.setItem(an,JSON.stringify(L.state))),
-                L.type==="WELCOME"&&(
-                    we(L.playerId),
-                    localStorage.setItem(dl,L.playerId.toString()),
-                    m(R=>({
+        j.current = P;
+        P.on("open", () => { ie("Conectado. Sincronizando..."); rt(200); });
+        P.on("data", L => {
+            if (L.type !== "PING") {
+                if (L.type === "SYNC_STATE") {
+                    i(L.state);
+                    localStorage.setItem(an, JSON.stringify(L.state));
+                } else if (L.type === "WELCOME") {
+                    we(L.playerId);
+                    localStorage.setItem(dl, L.playerId.toString());
+                    m(R => ({
                         ...R,
-                        players:L.totalPlayers,
-                        variant:L.variant||"standard",
-                        connected:!0,
-                        names:L.names,
-                        roomId: k // Asegurar ID correcto en estado
-                    })),
-                    P.send({type:"NAME_UPDATE",id:L.playerId,name:c}),
-                    ie("¡Dentro!")
-                ),
-                L.type==="LOBBY_UPDATE"&&(ie(`Sala: ${L.count}/${L.max}`),L.names&&m(R=>({...R,names:L.names,connectedCount:L.count}))),
-                L.type==="ERROR"&&(ie(`❌ ${L.message}`),P.close(),j.current=null)
-            )
+                        players: L.totalPlayers,
+                        variant: L.variant || "standard",
+                        connected: !0,
+                        names: L.names,
+                        roomId: k
+                    }));
+                    P.send({ type: "NAME_UPDATE", id: L.playerId, name: c });
+                    ie("¡Dentro!");
+                } else if (L.type === "LOBBY_UPDATE") {
+                    ie(`Sala: ${L.count}/${L.max}`);
+                    if (L.names) m(R => ({ ...R, names: L.names, connectedCount: L.count }));
+                } else if (L.type === "ERROR") {
+                    ie(`❌ ${L.message}`);
+                    P.close();
+                    j.current = null;
+                }
+            }
         });
-        P.on("close",()=>{ie("Desconectado."),j.current=null});
-        P.on("error",L=>{ie("Error conexión"),console.error(L)})
+        P.on("close", () => { ie("Desconectado."); j.current = null; });
+        P.on("error", L => { ie("Error conexión"); console.error(L); });
     };
 
     const pt=async()=>{const k=`${window.location.protocol}//${window.location.host}${window.location.pathname}?room=${Ye}`;if(navigator.share)try{await navigator.share({title:"Splendor",text:"Únete:",url:k})}catch(P){console.error(P)}else navigator.clipboard.writeText(k),ie("¡Copiado!")},be=k=>{i(k),localStorage.setItem(an,JSON.stringify(k)),l(!0),f.isOnline&&(f.isHost?Ie({type:"SYNC_STATE",state:k}):j.current?.open&&j.current.send({type:"ACTION_SYNC",state:k}))},ot=()=>{try{const k=localStorage.getItem(an);if(k){const P=JSON.parse(k);if(i(P),P.isMultiplayer){const L=localStorage.getItem(dl);L!==null&&we(parseInt(L))}m(L=>({...L,players:P.players.length,variant:P.variant,isOnline:P.isMultiplayer||!1,roomId:P.roomId||""}))}}catch{localStorage.removeItem(an),l(!1)}},lt=()=>{localStorage.removeItem(an),f.isOnline&&localStorage.setItem(fl,c),rt(100);const k=[...ah].sort(()=>Math.random()-.5),P=[...uh].sort(()=>Math.random()-.5),L=[...ch].sort(()=>Math.random()-.5),R=Array.from({length:f.players}).map((fe,ze)=>({id:ze,name:ze===0? (c || "Jugador 1") : (f.numBots > 0 && ze > 0 ? `Bot ${ze} (${["Fácil","Medio","Difícil","Experto"][f.botDifficulty]})` : f.names[ze]||`Jugador ${ze+1}`),tokens:{white:0,blue:0,green:0,red:0,black:0,gold:0,pearl:0},bonuses:{white:0,blue:0,green:0,red:0,black:0,gold:0,pearl:0},reserved:[],score:0,nobles:[],privileges:0,crowns:0}));let A=f.players===2?4:f.players===3?5:7,Z;if(f.variant==="duel"){const fe=["white","blue","green","red","black","pearl"];Z=ph.map(ze=>ze.map(()=>fe[Math.floor(Math.random()*fe.length)])),Z[2][2]="gold"}const re=f.variant==="standard"?[...dh].sort(()=>Math.random()-.5).slice(0,f.players+1):f.variant==="cities"?[...fh].sort(()=>Math.random()-.5).slice(0,3):[],me={players:R,currentPlayerIndex:0,tokens:{white:A,blue:A,green:A,red:A,black:A,gold:5,pearl:0},tokenGrid:Z,privilegesInBank:3,decks:{1:k,2:P,3:L},visibleCards:{1:k.splice(0,4),2:P.splice(0,4),3:L.splice(0,4)},nobles:re,winner:null,turn:1,selectedTokens:[],selectedStandardTokens:[],message:`${R[0].name}, comienza tu legado.`,variant:f.variant,isSetup:!1,isMultiplayer:f.isOnline,roomId:f.roomId};be(me)},Me=k=>{switch(k){case 1:return"bg-emerald-700/80 border-emerald-900";case 2:return"bg-amber-600/80 border-amber-800";case 3:return"bg-blue-700/80 border-blue-900";default:return"bg-slate-700"}},se=()=>a?a.isMultiplayer?a.currentPlayerIndex===Je:f.numBots > 0 ? a.currentPlayerIndex === 0 : !0:!1,z=a?a.players[a.currentPlayerIndex]:null,Y=(k,P,L,R,A,Z)=>{let re=null;const me=k[a.currentPlayerIndex];if(a.variant==="duel")me.score>=20&&(re=me.id),me.crowns>=10&&(re=me.id),Object.keys(me.bonuses).forEach(Ot=>{me.bonuses[Ot]>=10&&(re=me.id)});else if(a.currentPlayerIndex===k.length-1){const dn=k.filter(fn=>fn.score>=15);dn.length>0&&(re=dn.sort((fn,Wr)=>Wr.score-fn.score)[0].id)}const fe=(a.currentPlayerIndex+1)%k.length,ze=k[fe].name;be({...a,players:k,tokens:P,decks:L,visibleCards:R,nobles:A,currentPlayerIndex:fe,turn:fe===0?a.turn+1:a.turn,selectedStandardTokens:[],selectedTokens:[],winner:re,message:re!==null?`¡${k[re].name} ha triunfado!`:Z?`${Z} Turno de ${ze}.`:`Turno de ${ze}.`})},U=(k,P,L)=>{if((!se() && f.numBots === 0) || (!se() && f.numBots > 0 && a.currentPlayerIndex === 0)) return; if(!z||!ts(z,k))return;rt(40);const{newPlayer:R,newBank:A}=hh(z,k,a.tokens),Z={...a.visibleCards},re={...a.decks};if(L)R.reserved=R.reserved.filter(Oe=>Oe.id!==k.id);else{const Oe=P;Z[Oe]=Z[Oe].filter(dn=>dn.id!==k.id),re[Oe].length>0&&Z[Oe].push(re[Oe].pop())}const me=[...a.nobles],fe=me.findIndex(Oe=>mh(R,Oe));let ze="";if(fe!==-1){const Oe=me[fe];me.splice(fe,1),R.nobles.push(Oe),R.score+=Oe.points,ze=`¡${R.name} ha atraído a un Noble! (+${Oe.points} pts).`,rt([50,100,50])}const Ot=[...a.players];Ot[a.currentPlayerIndex]=R,Y(Ot,A,re,Z,me,ze)},_=(k,P)=>{if((!se() && f.numBots === 0) || (!se() && f.numBots > 0 && a.currentPlayerIndex === 0)) return;if(z.reserved.length>=3){rt(200);return}rt(40);const L={...z,reserved:[...z.reserved,k]},R={...a.tokens};R.gold>0&&(R.gold--,L.tokens.gold++);const A=P,Z={...a.visibleCards},re={...a.decks};Z[A]=Z[A].filter(fe=>fe.id!==k.id),re[A].length>0&&Z[A].push(re[A].pop());const me=[...a.players];me[a.currentPlayerIndex]=L,Y(me,R,re,Z,a.nobles)},N=k=>{if((!se() && f.numBots === 0) || (!se() && f.numBots > 0 && a.currentPlayerIndex === 0)) return;if(!z||k==="gold"||a.tokens[k]<=0)return;const P=[...a.selectedStandardTokens];gh(P,k,a.tokens)&&(rt(20),be({...a,selectedStandardTokens:[...a.selectedStandardTokens,k]}))},ee=()=>{if(!se()||!z)return;const k=a.selectedStandardTokens;if(k.length===0)return;rt(40);const P={...a.tokens},L={...z,tokens:{...z.tokens}};if(k.forEach(A=>{P[A]--,L.tokens[A]++}),Object.values(L.tokens).reduce((A,Z)=>A+Z,0)>xh){be({...a,message:"¡Capacidad alcanzada! Gasta gemas primero."});return}const R=[...a.players];R[a.currentPlayerIndex]=L,Y(R,P,a.decks,a.visibleCards,a.nobles)};return a?h.jsxs("div",{className:"h-[100dvh] w-full flex flex-col font-sans select-none overflow-hidden touch-none pt-safe bg-[#020617]",children:[h.jsx("header",{className:"shrink-0 z-50 bg-slate-950/80 backdrop-blur-md border-b border-white/5 shadow-lg h-12 md:h-20",children:h.jsxs("div",{className:"w-full px-3 py-1 md:px-8 md:py-3 flex justify-between items-center h-full",children:[h.jsx("div",{className:"flex items-center gap-3",children:h.jsxs("h1",{className:"text-lg md:text-3xl font-serif font-black text-amber-500 tracking-tighter uppercase drop-shadow-md",children:["Splendor ",h.jsx("span",{className:"hidden md:inline text-amber-700",children:"|"})," ",h.jsx("span",{className:"hidden sm:inline text-slate-400 text-sm md:text-xl tracking-widest font-sans font-light",children:"MASTER"})]})}),h.jsxs("div",{className:"flex gap-2 md:gap-6 items-center",children:[h.jsxs("div",{className:"flex flex-col items-end",children:[h.jsx("span",{className:"text-[9px] md:text-xs text-slate-500 uppercase font-black tracking-widest",children:a.isMultiplayer?se()?h.jsx("span",{className:"text-green-400 animate-pulse",children:"Tu Turno"}):"Esperando...": se() ? "Tu Turno" : "Turno de " + z?.name}),h.jsx("span",{className:`text-sm md:text-xl font-serif font-bold truncate max-w-[100px] md:max-w-none ${z?.id===0?"text-blue-400":"text-rose-400"}`,children:z?.name})]}),h.jsx("button",{onClick:()=>i(null),className:"w-8 h-8 md:w-10 md:h-10 rounded-full bg-slate-800/80 border border-slate-700 flex items-center justify-center hover:bg-slate-700 transition-colors hover:border-amber-500/50 group",children:h.jsx("svg",{className:"w-4 h-4 md:w-5 md:h-5 text-slate-400 group-hover:text-white",fill:"none",stroke:"currentColor",viewBox:"0 0 24 24",children:h.jsx("path",{strokeLinecap:"round",strokeLinejoin:"round",strokeWidth:"2",d:"M6 18L18 6M6 6l12 12"})})})]})]})}),h.jsxs("div",{className:"flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden relative",children:[h.jsx("main",{className:"flex-1 overflow-y-auto overflow-x-hidden scrollbar-hide md:scrollbar-default pb-40 md:pb-0",children:h.jsx("div",{className:"w-full px-2 md:px-6 flex flex-col gap-2 md:gap-6 items-start py-2 md:py-4",children:h.jsxs("div",{className:"flex flex-col gap-3 md:gap-8 w-full min-w-0",children:[h.jsx("div",{className:"flex justify-start md:justify-center gap-2 md:gap-6 overflow-x-auto px-2 py-1 md:py-2 snap-x scrollbar-hide min-h-[100px] md:min-h-[160px] items-center mask-linear-fade",children:a.nobles.length===0?h.jsx("div",{className:"text-slate-700 text-xs uppercase font-bold tracking-widest border border-slate-800 p-4 rounded-xl",children:"Sin Nobles Disponibles"}):a.nobles.map(k=>h.jsx("div",{className:"snap-center first:pl-2 last:pr-2",children:h.jsx(vh,{noble:k,canClaim:!1})},k.id))}),h.jsx("div",{className:"flex flex-col gap-2 md:gap-5",children:[3,2,1].map(k=>h.jsxs("div",{className:"flex gap-2 md:gap-4 justify-start md:justify-center overflow-x-auto px-1 py-6 md:py-8 snap-x scrollbar-hide",children:[h.jsxs("div",{onClick:()=>U(a.decks[k][a.decks[k].length-1],k,!1),className:`
