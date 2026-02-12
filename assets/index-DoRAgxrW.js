@@ -138,6 +138,22 @@ const getBotAction = (state, playerIndex, difficulty) => {
 function Ch(){const[a,i]=ce.useState(null),[s,l]=ce.useState(!1),[c,p]=ce.useState(""),[f,m]=ce.useState({players:2,variant:"standard",names:{},isOnline:!1,isHost:!0,roomId:"",connectedCount:1, numBots: 0, botDifficulty: 1}),[v,C]=ce.useState(null),S=ce.useRef(null),T=ce.useRef([]),j=ce.useRef(null),Q=ce.useRef(!1),ne=ce.useRef(null),q=ce.useRef(f),ae=ce.useRef(a),[Ye,st]=ce.useState(""),[Ke,ie]=ce.useState(""),[Je,we]=ce.useState(0),[Pe,He]=ce.useState(!1);
 ce.useEffect(()=>{q.current=f},[f]),ce.useEffect(()=>{ae.current=a},[a]),ce.useEffect(()=>{localStorage.getItem(an)&&l(!0);const P=localStorage.getItem(fl);P&&p(P)},[]),ce.useEffect(()=>{const P=new URLSearchParams(window.location.search).get("room");P&&m(L=>({...L,isOnline:!0,isHost:!1,roomId:P}))},[]),ce.useEffect(()=>{const k=P=>{P.preventDefault(),C(P)};return window.addEventListener("beforeinstallprompt",k),()=>window.removeEventListener("beforeinstallprompt",k)},[]);
 
+              
+              // --- MODIFICACIÓN 1: INICIO ---
+// Generar un ID único para este navegador que no cambie al recargar
+const [stableId] = ce.useState(() => {
+    const saved = localStorage.getItem("splendor_client_uuid");
+    if (saved) return saved;
+    const newId = Math.random().toString(36).substring(2) + Date.now().toString(36);
+    localStorage.setItem("splendor_client_uuid", newId);
+    return newId;
+});
+
+// Referencia para que el HOST recuerde qué ID estable pertenece a qué número de jugador (0, 1, 2...)
+const playerMapping = ce.useRef({}); 
+// --- MODIFICACIÓN 1: FIN ---
+
+              
 // Bot Turn Effect
 ce.useEffect(() => {
     if (a && !a.isMultiplayer && !a.winner) {
