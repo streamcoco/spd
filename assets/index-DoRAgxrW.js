@@ -76,60 +76,93 @@ const getBotAction = (state, playerIndex, difficulty) => {
   const player = state.players[playerIndex];
   const allVisibleCards = [...state.visibleCards[1], ...state.visibleCards[2], ...state.visibleCards[3]];
   
-  // 1. Check if can buy any reserved card (High priority)
-  const affordableReserved = player.reserved.filter(card => ts(player, card));
-  if (affordableReserved.length > 0) {
-    if (difficulty >= BOT_DIFFICULTIES.HARD) {
-        affordableReserved.sort((a, b) => b.points - a.points);
+  // Scoring System: Calcula el valor real de cada carta
+  const calculateCardScore = (card) => {
+    let score = card.points * 5; 
+    // Sinergia con Nobles
+    state.nobles.forEach(noble => {
+        const currentBonus = player.bonuses[card.bonus] || 0;
+        const req = noble.requirements[card.bonus] || 0;
+        if (currentBonus < req) score += 3.5; // Me acerca al noble
+        
+        // ¿Me da el noble YA?
+        const tempPlayer = {...player, bonuses: {...player.bonuses, [card.bonus]: currentBonus + 1}};
+        if (mh(tempPlayer, noble)) score += 15; 
+    });
+    // Costo eficiente (motor temprano)
+    if (card.level === 1) {
+        const cost = Object.values(card.cost).reduce((a,b)=>a+b,0);
+        if (cost < 4) score += 2;
     }
-    return { type: 'BUY_RESERVED', card: affordableReserved[0], level: 0 }; 
-  }
+    // Penalizar colores sobrantes
+    if (player.bonuses[card.bonus] > 6 && card.points === 0) score -= 5;
+    return score;
+  };
 
-  // 2. Check if can buy any visible card
+  // 1. COMPRAR (BUY)
   const affordableVisible = allVisibleCards.filter(card => ts(player, card));
-  if (affordableVisible.length > 0) {
-    if (difficulty === BOT_DIFFICULTIES.EASY) {
-       const randomCard = affordableVisible[Math.floor(Math.random() * affordableVisible.length)];
-       return { type: 'BUY', card: randomCard, level: randomCard.level };
-    } else {
-       // Score cards based on: points, noble utility, cost efficiency
-       const scoredCards = affordableVisible.map(card => {
-         let score = card.points * 10;
-         state.nobles.forEach(noble => {
-            if (noble.requirements[card.bonus] > (player.bonuses[card.bonus] || 0)) score += 5;
-         });
-         if (player.score < 5) score -= (card.level * 2); 
-         return { card, score };
-       });
-       scoredCards.sort((a, b) => b.score - a.score);
-       return { type: 'BUY', card: scoredCards[0].card, level: scoredCards[0].card.level };
-    }
+  const affordableReserved = player.reserved.filter(card => ts(player, card));
+  
+  let bestMove = null;
+  let maxScore = -100;
+
+  // Evaluar cartas visibles
+  affordableVisible.forEach(card => {
+      const s = calculateCardScore(card);
+      if (s > maxScore) { maxScore = s; bestMove = { type: 'BUY', card, level: card.level }; }
+  });
+  // Evaluar reservadas (bono por liberar slot)
+  affordableReserved.forEach(card => {
+      const s = calculateCardScore(card) + 2; 
+      if (s > maxScore) { maxScore = s; bestMove = { type: 'BUY_RESERVED', card, level: 0 }; }
+  });
+
+  // Ejecutar mejor jugada
+  if (bestMove && (difficulty > 0 || Math.random() > 0.4)) {
+      return bestMove;
+  } else if (affordableVisible.length > 0 && difficulty === 0) {
+      const rnd = affordableVisible[Math.floor(Math.random() * affordableVisible.length)];
+      return { type: 'BUY', card: rnd, level: rnd.level };
   }
 
-  // 3. Reserve a card if rich enough or good card seen (Medium+)
+  // 2. RESERVAR (RESERVE) - Bloqueo y Estrategia
   const totalTokens = Object.values(player.tokens).reduce((a, b) => a + b, 0);
-  if (difficulty >= BOT_DIFFICULTIES.MEDIUM && player.reserved.length < 3 && totalTokens < 8) {
-     const reserveCandidates = [...state.visibleCards[2], ...state.visibleCards[3]];
-     if (reserveCandidates.length > 0 && Math.random() > 0.7) { 
-        const target = reserveCandidates[Math.floor(Math.random() * reserveCandidates.length)];
+  if (difficulty >= 2 && player.reserved.length < 3 && totalTokens < 9) {
+     const tier23 = [...state.visibleCards[2], ...state.visibleCards[3]];
+     tier23.sort((a,b) => calculateCardScore(b) - calculateCardScore(a));
+     const target = tier23[0];
+     if (target && calculateCardScore(target) > 6) {
         return { type: 'RESERVE', card: target, level: target.level };
      }
   }
 
-  // 4. Take Tokens
-  const availableColors = ["white", "blue", "green", "red", "black"].filter(c => state.tokens[c] > 0);
+  // 3. TOMAR FICHAS (TOKENS) - Planificación
+  const futureTargets = allVisibleCards.sort((a,b) => calculateCardScore(b) - calculateCardScore(a));
+  const dreamCard = futureTargets[0];
+  let neededColors = [];
   
-  if (availableColors.length > 0) {
-     if (availableColors.length >= 3) {
-        const selected = availableColors.slice(0, 3);
-        return { type: 'TOKENS', tokens: selected };
-     }
-     const doubleColor = availableColors.find(c => state.tokens[c] >= 4);
-     if (doubleColor && Math.random() > 0.5) {
-        return { type: 'TOKENS', tokens: [doubleColor, doubleColor] };
-     }
-     return { type: 'TOKENS', tokens: availableColors };
+  if (dreamCard) {
+      ["white", "blue", "green", "red", "black"].forEach(c => {
+          if ((player.bonuses[c] + player.tokens[c]) < dreamCard.cost[c]) neededColors.push(c);
+      });
   }
+
+  const bankColors = ["white", "blue", "green", "red", "black"].filter(c => state.tokens[c] > 0);
+  // Priorizar lo que necesito
+  let selection = bankColors.filter(c => neededColors.includes(c)); 
+  // Rellenar hasta 3 distintos
+  if (selection.length < 3) {
+      const others = bankColors.filter(c => !neededColors.includes(c));
+      while (selection.length < 3 && others.length > 0) selection.push(others.pop());
+  }
+  
+  // Tomar 2 del mismo color (solo experto)
+  if (difficulty === 3 && neededColors.length === 1) {
+      const col = neededColors[0];
+      if (state.tokens[col] >= 4) return { type: 'TOKENS', tokens: [col, col] };
+  }
+
+  if (selection.length > 0) return { type: 'TOKENS', tokens: selection.slice(0,3) };
 
   return { type: 'PASS' }; 
 };
@@ -222,7 +255,6 @@ function Ch(){
     
     // --- LÓGICA DE PEERJS Y RECONEXIÓN ---
     ce.useEffect(()=>{let k=!0;if(!f.isOnline){S.current&&(S.current.destroy(),S.current=null,T.current=[],j.current=null,Q.current=!1,k&&(He(!1),st("")));return}if(f.isOnline&&!S.current&&!Q.current){Q.current=!0,console.log("Iniciando Red...");const P=_h(),L=new rh(P,{config:{iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"}]},debug:1});S.current=L,L.on("open",R=>{k&&(st(R),He(!0),Q.current=!1,q.current.isHost?(ie("Esperando jugadores..."),we(0),localStorage.setItem(dl,"0"),m(A=>({...A,names:{...A.names,0:c||"Anfitrión"}}))):ie('Red lista. Pulsa "Unirse".'))}),L.on("error",R=>{k&&(Q.current=!1,R.type==="peer-unavailable"?ie("❌ Sala no encontrada"):R.type==="disconnected"?ie("⚠️ Desconectado"):ie(`❌ Error: ${R.type}`),console.error("Peer Error:",R))}),L.on("disconnected",()=>{k&&(ie("⚠️ Reconectando..."),S.current&&!S.current.destroyed&&S.current.reconnect())});
-    
     L.on("connection",R=>{
         R.on("open",()=>{
             const A=q.current;
@@ -234,64 +266,79 @@ function Ch(){
             const pName = meta.name || "Jugador";
             let pId;
 
-            // LÓGICA DE RECUPERACIÓN DE ASIENTO
+            // --- LÓGICA DE RECUPERACIÓN ROBUSTA ---
             if(sId && playerMap.current[sId]){
                 pId = playerMap.current[sId];
-                console.log(`Jugador reconocido: ${pId}`);
-                // Borrar conexión anterior si existe
-                T.current = T.current.filter(conn => conn.metadata?.stableId !== sId);
+                console.log(`[HOST] Reconexión ID: ${pId}`);
+                
+                // Buscar si existe conexión vieja y reemplazarla EXACTAMENTE en su lugar
+                const oldConnIdx = T.current.findIndex(conn => conn.metadata?.stableId === sId);
+                if (oldConnIdx !== -1) {
+                    try { T.current[oldConnIdx].close(); } catch(e){}
+                    T.current[oldConnIdx] = R; // Reemplazo quirúrgico: Mantiene el orden
+                } else {
+                    T.current.push(R);
+                }
             } else {
                 // Nuevo jugador
                 const currentIds = Object.keys(playerMap.current).length;
-                if(currentIds >= A.players - 1){ // -1 porque el host es 0
+                if(currentIds >= A.players - 1){ 
                     R.send({type:"ERROR",message:"Sala llena"});
+                    setTimeout(() => R.close(), 500);
                     return; 
                 }
                 pId = currentIds + 1;
                 if(sId) {
                     playerMap.current[sId] = pId;
-                    saveHostMap(); // GUARDAR LIBRETA EN DISCO
+                    saveHostMap(); // Guardar en libreta
                 }
+                T.current.push(R);
             }
 
-            T.current.push(R);
-            const totalConn = Object.keys(playerMap.current).length + 1;
+            // Contar conectados reales
+            const activeCount = Object.keys(playerMap.current).length + 1;
 
             if(k){
-                m(Z=>({...Z, connectedCount: totalConn}));
+                m(Z=>({...Z, connectedCount: activeCount}));
                 rt(200);
             }
 
             R.send({type:"WELCOME",playerId:pId,totalPlayers:A.players,variant:A.variant,names:A.names});
             if(ae.current) R.send({type:"SYNC_STATE",state:ae.current});
 
-            // Actualizar nombre si ha cambiado o es reconexión
-            if(pId && pName){
+            setTimeout(() => {
                 const newNames = {...A.names, [pId]: pName};
                 m(prev=>({...prev, names: newNames}));
-                Ie({type:"LOBBY_UPDATE", count: totalConn, max: A.players, names: newNames});
-            } else {
-                Ie({type:"LOBBY_UPDATE", count: totalConn, max: A.players, names: A.names});
-            }
+                Ie({type:"LOBBY_UPDATE", count: activeCount, max: A.players, names: newNames});
+            }, 100);
         });
         R.on("data",A=>ft(A,R));
         R.on("close",()=>{
-            // Al salir, NO borramos el ID de la libreta, solo la conexión activa.
-            T.current=T.current.filter(A=>A!==R&&A.peer!==R.peer);
+            // NO borramos de T.current para mantener el "asiento" reservado
+            console.log("Cliente desconectado (socket cerrado)");
         });
         R.on("error",A=>{console.error(A);R.close()})
-    })}return()=>{k=!1}},[f.isOnline,Ie,ft,c]);
+    })
+  
+    return()=>{k=!1}},[f.isOnline,Ie,ft,c]);
 
-    const It=()=>{
+const It=()=>{
         const k=f.roomId.trim().toUpperCase();
         if(!k){ie("Ingresa un ID");return}
         if(!S.current||!Pe){ie("⏳ Inicializando...");return}
+        
         j.current&&j.current.close();
         ie("Conectando...");
         localStorage.setItem(fl,c);
-        
-        // Enviar DNI al unirse
-        const P=S.current.connect(k,{reliable:!0,serialization:"json",metadata:{stableId,name:c}});
+        localStorage.setItem("spd_room", k); // PLAN B: Recordar sala
+
+        // Enviar DNI (stableId) para ser reconocido
+        const P=S.current.connect(k,{
+            reliable:!0,
+            serialization:"json",
+            metadata:{stableId:stableId, name:c}
+        });
+
         j.current=P;
         P.on("open",()=>{ie("Conectado. Sincronizando..."),rt(200)});
         P.on("data",L=>{
@@ -300,7 +347,14 @@ function Ch(){
                 L.type==="WELCOME"&&(
                     we(L.playerId),
                     localStorage.setItem(dl,L.playerId.toString()),
-                    m(R=>({...R,players:L.totalPlayers,variant:L.variant||"standard",connected:!0,names:L.names})),
+                    m(R=>({
+                        ...R,
+                        players:L.totalPlayers,
+                        variant:L.variant||"standard",
+                        connected:!0,
+                        names:L.names,
+                        roomId: k // Asegurar ID correcto en estado
+                    })),
                     P.send({type:"NAME_UPDATE",id:L.playerId,name:c}),
                     ie("¡Dentro!")
                 ),
@@ -308,7 +362,7 @@ function Ch(){
                 L.type==="ERROR"&&(ie(`❌ ${L.message}`),P.close(),j.current=null)
             )
         });
-        P.on("close",()=>{ie("Desconectado."),j.current=null,i(null)});
+        P.on("close",()=>{ie("Desconectado."),j.current=null});
         P.on("error",L=>{ie("Error conexión"),console.error(L)})
     };
 
